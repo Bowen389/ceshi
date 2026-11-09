@@ -1,8 +1,9 @@
 name: 三策略盘后扫描与模拟记账
 on:
   schedule:
-    - cron: '0 9 * * MON-FRI'
-    - cron: '30 9 * * MON-FRI'
+    - cron: '7 9 * * MON-FRI'
+    - cron: '37 9 * * MON-FRI'
+    - cron: '12 10 * * MON-FRI'
   workflow_dispatch:
   push:
     branches: [main]
@@ -27,7 +28,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: data/prices
-          key: tdx-v1-${{ github.run_id }}
+          key: tdx-v1-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: tdx-v1-
       - run: pip install -r requirements.txt
       - run: python -m unittest test_daily
