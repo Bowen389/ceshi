@@ -1,0 +1,44 @@
+name: 三策略盘后扫描与模拟记账
+on:
+  schedule:
+    - cron: '0 9 * * MON-FRI'
+    - cron: '30 9 * * MON-FRI'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/scan.yml', 'daily.py', 'market_data.py', 'requirements.txt']
+permissions:
+  contents: write
+concurrency:
+  group: ceshi-main
+  cancel-in-progress: false
+jobs:
+  scan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: git pull --ff-only origin main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - uses: actions/cache@v4
+        with:
+          path: data/prices
+          key: tdx-v1-${{ github.run_id }}
+          restore-keys: tdx-v1-
+      - run: pip install -r requirements.txt
+      - run: python -m unittest test_daily
+      - run: python daily.py
+      - name: 发布日报和账本
+        run: |
+          mkdir -p reports
+          git add reports
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Update paper ledger and candidate report'
+          git pull --rebase origin main
+          git push origin HEAD:main
