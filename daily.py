@@ -220,13 +220,15 @@ def main():
     parser.add_argument("--date", help="显式指定已收盘交易日")
     args = parser.parse_args()
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
-    date = args.date or now.date().isoformat()
     cal = get_calendar("XSHG")
-    if not cal.is_session(date) or (date == now.date().isoformat() and now.time() < time(15)):
-        print("当前日期没有已收盘交易日")
-        return
-    if date > now.date().isoformat():
-        raise ValueError("不能扫描未来日期")
+    cutoff = pd.Timestamp(now.date()) - pd.Timedelta(days=now.time() < time(15))
+    if args.date:
+        date = args.date
+        if pd.Timestamp(date) > cutoff or not cal.is_session(date):
+            parser.error("--date 必须是已收盘交易日")
+    else:
+        date = cal.date_to_session(cutoff, direction="previous").date().isoformat()
+    print(f"扫描及补算至 {date}", flush=True)
     state_file = REPORTS / "state.json"
     state = json.loads(state_file.read_text(encoding="utf8")) if state_file.exists() else None
     if state and state["date"] >= date:
