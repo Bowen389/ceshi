@@ -221,7 +221,9 @@ def main():
     args = parser.parse_args()
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     cal = get_calendar("XSHG")
-    cutoff = pd.Timestamp(now.date()) - pd.Timedelta(days=now.time() < time(15))
+    cutoff = pd.Timestamp(now.date())
+    if now.time() < time(15):
+        cutoff -= pd.Timedelta(days=1)
     if args.date:
         date = args.date
         if pd.Timestamp(date) > cutoff or not cal.is_session(date):
