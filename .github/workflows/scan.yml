@@ -1,9 +1,9 @@
 name: 三策略盘后扫描与模拟记账
 on:
   schedule:
-    - cron: '17 8 * * MON-FRI'
-    - cron: '37 9 * * MON-FRI'
-    - cron: '12 10 * * MON-FRI'
+    # GitHub native schedule; UTC -> Asia/Shanghai 17:00 / 18:00
+    - cron: '0 9 * * 1-5'
+    - cron: '0 10 * * 1-5'
   workflow_dispatch:
   push:
     branches: [main]
