@@ -1,0 +1,67 @@
+name: 盘后兜底自检（post-close watchdog）
+# 与主流程「三策略盘后扫描与模拟记账」解耦的独立定时器。
+# 动机：GitHub Actions 的 on.schedule 会被整段延迟甚至跳过（实测本仓主流程延迟 6.6~10 小时，
+# 2026-11-19 与 11-20 两天 17:00 槽位零触发），而原先的 guard 步骤写在主流程内部，
+# 主流程不触发时 guard 也无从执行。这里把"发现漏跑"和"执行扫描"拆成两个 workflow。
+on:
+  schedule:
+    # 北京 17:20 / 17:50 / 18:20 / 18:50 / 19:20 / 19:50 / 20:20 / 20:50（周一至周五）
+    - cron: '20,50 9,10,11,12 * * 1-5'
+    # 北京 08:20（周二~周六）：开盘前最后一次兜底，补前一天漏掉的盘后报告
+    - cron: '20 0 * * 2-6'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: postclose-watchdog
+  cancel-in-progress: false
+jobs:
+  watchdog:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TZ: Asia/Shanghai
+      WATCHDOG_ROOT: '.'
+      WATCHDOG_GLOBS: 'reports/{D}.md'
+      MAIN_WORKFLOW: 'scan.yml'
+      MAIN_NAME: '三策略盘后扫描与模拟记账'
+    steps:
+      - uses: actions/checkout@v4
+      - name: 判定当日盘后产物是否缺失
+        id: need
+        run: |
+          rc=0
+          python3 scripts/postclose_watchdog.py > /tmp/wd.json || rc=$?
+          cat /tmp/wd.json
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -eq 10 ]; then echo "missing=true" >> "$GITHUB_OUTPUT"; else echo "missing=false" >> "$GITHUB_OUTPUT"; fi
+      - name: 主流程近 4 小时是否已运行（防止失败态重试风暴）
+        if: steps.need.outputs.missing == 'true'
+        id: recent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -s -H "authorization: bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs?per_page=25" > /tmp/runs.json || echo '{}' > /tmp/runs.json
+          n=$(MAIN_NAME="$MAIN_NAME" python3 -c 'import datetime as dt,json,os; runs=json.load(open("/tmp/runs.json")).get("workflow_runs",[]); name=os.environ["MAIN_NAME"]; now=dt.datetime.now(dt.timezone.utc); print(sum(1 for r in runs if r.get("name")==name and (now-dt.datetime.strptime(r["created_at"],"%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)).total_seconds()<=14400))')
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+      - name: 缺失且主流程近 4 小时未运行 → 触发主流程补扫
+        if: steps.need.outputs.missing == 'true' && steps.recent.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H "authorization: bearer $GH_TOKEN" -H "content-type: application/json" \
+            -d '{"ref":"${{ github.ref_name }}"}' \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/$MAIN_WORKFLOW/dispatch")
+          echo "dispatch http $code"
+          if [ "$code" != "204" ]; then
+            echo "::error::dispatch 返回 $code，请手动在 Actions 运行 $MAIN_WORKFLOW"
+            exit 1
+          fi
+      - name: 主流程已跑过但产物仍缺 → 只告警不重试
+        if: steps.need.outputs.missing == 'true' && steps.recent.outputs.count != '0'
+        run: |
+          echo "::warning::主流程「$MAIN_NAME」近 4 小时已运行 ${{ steps.recent.outputs.count }} 次，但 $WATCHDOG_GLOBS 仍未落地 → 判定为脚本级失败，不自动重试，请看主流程日志。"
